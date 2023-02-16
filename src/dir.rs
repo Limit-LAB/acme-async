@@ -45,11 +45,12 @@ pub struct Directory<P: Persist> {
 
 impl<P: Persist> Directory<P> {
     /// Create a directory over a persistence implementation and directory url.
-    pub fn from_url(persist: P, url: DirectoryUrl) -> Result<Directory<P>> {
+    pub async fn from_url(persist: P, url: DirectoryUrl<'_>) -> Result<Directory<P>> {
         let dir_url = url.to_url();
-        let res = req_handle_error(req_get(dir_url))?;
-        let api_directory: ApiDirectory = read_json(res)?;
+        let res = req_handle_error(req_get(dir_url).await).await?;
+        let api_directory: ApiDirectory = read_json(res).await?;
         let nonce_pool = Arc::new(NoncePool::new(&api_directory.newNonce));
+
         Ok(Directory {
             persist,
             nonce_pool,
@@ -70,10 +71,10 @@ impl<P: Persist> Directory<P> {
     ///
     /// This is the same as calling
     /// `account_with_realm(contact_email, ["mailto: <contact_email>"]`)
-    pub fn account(&self, contact_email: &str) -> Result<Account<P>> {
+    pub async fn account(&self, contact_email: &str) -> Result<Account<P>> {
         // Contact email is the persistence realm when using this method.
         let contact = vec![format!("mailto:{}", contact_email)];
-        self.account_with_realm(contact_email, Some(contact))
+        self.account_with_realm(contact_email, Some(contact)).await
     }
 
     /// Access an account using a lower level method. The contact is optional
@@ -92,7 +93,7 @@ impl<P: Persist> Directory<P> {
     ///
     /// Either way the `newAccount` API endpoint is called and thereby ensures the
     /// account is active and working.
-    pub fn account_with_realm(
+    pub async fn account_with_realm(
         &self,
         realm: &str,
         contact: Option<Vec<String>>,
@@ -124,10 +125,12 @@ impl<P: Persist> Directory<P> {
         };
 
         let mut transport = Transport::new(&self.nonce_pool, acme_key);
-        let res = transport.call_jwk(&self.api_directory.newAccount, &acc)?;
+        let res = transport
+            .call_jwk(&self.api_directory.newAccount, &acc)
+            .await?;
         let kid = req_expect_header(&res, "location")?;
         debug!("Key id is: {}", kid);
-        let api_account: ApiAccount = read_json(res)?;
+        let api_account: ApiAccount = read_json(res).await?;
 
         // fill in the server returned key id
         transport.set_key_id(kid);
@@ -163,34 +166,34 @@ impl<P: Persist> Directory<P> {
 mod test {
     use super::*;
     use crate::persist::*;
-    #[test]
-    fn test_create_directory() -> Result<()> {
+    #[tokio::test]
+    async fn test_create_directory() -> Result<()> {
         let server = crate::test::with_directory_server();
         let url = DirectoryUrl::Other(&server.dir_url);
         let persist = MemoryPersist::new();
-        let _ = Directory::from_url(persist, url)?;
+        let _ = Directory::from_url(persist, url).await?;
         Ok(())
     }
 
-    #[test]
-    fn test_create_acount() -> Result<()> {
+    #[tokio::test]
+    async fn test_create_acount() -> Result<()> {
         let server = crate::test::with_directory_server();
         let url = DirectoryUrl::Other(&server.dir_url);
         let persist = MemoryPersist::new();
-        let dir = Directory::from_url(persist, url)?;
-        let _ = dir.account("foo@bar.com")?;
+        let dir = Directory::from_url(persist, url).await?;
+        let _ = dir.account("foo@bar.com").await?;
         Ok(())
     }
 
-    #[test]
-    fn test_persisted_acount() -> Result<()> {
+    #[tokio::test]
+    async fn test_persisted_acount() -> Result<()> {
         let server = crate::test::with_directory_server();
         let url = DirectoryUrl::Other(&server.dir_url);
         let persist = MemoryPersist::new();
-        let dir = Directory::from_url(persist, url)?;
-        let acc1 = dir.account("foo@bar.com")?;
-        let acc2 = dir.account("foo@bar.com")?;
-        let acc3 = dir.account("karlfoo@bar.com")?;
+        let dir = Directory::from_url(persist, url).await?;
+        let acc1 = dir.account("foo@bar.com").await?;
+        let acc2 = dir.account("foo@bar.com").await?;
+        let acc3 = dir.account("karlfoo@bar.com").await?;
         assert_eq!(acc1.acme_private_key_pem(), acc2.acme_private_key_pem());
         assert!(acc1.acme_private_key_pem() != acc3.acme_private_key_pem());
         Ok(())
@@ -198,7 +201,7 @@ mod test {
 
     // #[test]
     // fn test_the_whole_hog() -> Result<()> {
-    //     std::env::set_var("RUST_LOG", "acme_lib=trace");
+    //     std::env::set_var("RUST_LOG", "acme_async=trace");
     //     let _ = env_logger::try_init();
 
     //     use crate::cert::create_p384_key;

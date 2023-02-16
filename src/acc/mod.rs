@@ -116,7 +116,7 @@ impl<P: Persist> Account<P> {
     /// names supplied are exactly the same.
     ///
     /// [100 names]: https://letsencrypt.org/docs/rate-limits/
-    pub fn new_order(&self, primary_name: &str, alt_names: &[&str]) -> Result<NewOrder<P>> {
+    pub async fn new_order(&self, primary_name: &str, alt_names: &[&str]) -> Result<NewOrder<P>> {
         // construct the identifiers
         let prim_arr = [primary_name];
         let domains = prim_arr.iter().chain(alt_names);
@@ -132,9 +132,9 @@ impl<P: Persist> Account<P> {
 
         let new_order_url = &self.inner.api_directory.newOrder;
 
-        let res = self.inner.transport.call(new_order_url, &order)?;
+        let res = self.inner.transport.call(new_order_url, &order).await?;
         let order_url = req_expect_header(&res, "location")?;
-        let api_order: ApiOrder = read_json(res)?;
+        let api_order: ApiOrder = read_json(res).await?;
 
         let order = Order::new(&self.inner, api_order, order_url);
         Ok(NewOrder { order })
@@ -146,7 +146,11 @@ impl<P: Persist> Account<P> {
     /// certs, the revoked certificate will still be available using [`certificate`].
     ///
     /// [`certificate`]: struct.Account.html#method.certificate
-    pub fn revoke_certificate(&self, cert: &Certificate, reason: RevocationReason) -> Result<()> {
+    pub async fn revoke_certificate(
+        &self,
+        cert: &Certificate,
+        reason: RevocationReason,
+    ) -> Result<()> {
         // convert to base64url of the DER (which is not PEM).
         let certificate = base64url(&cert.certificate_der());
 
@@ -156,7 +160,7 @@ impl<P: Persist> Account<P> {
         };
 
         let url = &self.inner.api_directory.revokeCert;
-        self.inner.transport.call(url, &revoc)?;
+        self.inner.transport.call(url, &revoc).await?;
 
         Ok(())
     }
@@ -189,14 +193,14 @@ mod test {
     use crate::persist::*;
     use crate::*;
 
-    #[test]
-    fn test_create_order() -> Result<()> {
+    #[tokio::test]
+    async fn test_create_order() -> Result<()> {
         let server = crate::test::with_directory_server();
         let url = DirectoryUrl::Other(&server.dir_url);
         let persist = MemoryPersist::new();
-        let dir = Directory::from_url(persist, url)?;
-        let acc = dir.account("foo@bar.com")?;
-        let _ = acc.new_order("acmetest.example.com", &[])?;
+        let dir = Directory::from_url(persist, url).await?;
+        let acc = dir.account("foo@bar.com").await?;
+        let _ = acc.new_order("acmetest.example.com", &[]).await?;
         Ok(())
     }
 }

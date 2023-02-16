@@ -1,27 +1,31 @@
 [package]
-name = "acme-lib"
+name = "acme-async"
 description = "Library for requesting certificates from an ACME provider."
 license = "MIT"
-repository = "https://github.com/algesten/acme-lib"
+repository = "https://github.com/Limit-LAB/acme-async"
 readme = "README.md"
 version = "0.8.2"
 authors = ["Martin Algesten <martin@algesten.se>"]
 keywords = ["letsencrypt", "acme"]
 categories = ["web-programming", "api-bindings"]
-edition = "2018"
+edition = "2021"
+
+[lib]
+doctest = false
 
 [dependencies]
-base64 = "0.13"
+base64 = "0.21.0"
 lazy_static = "1"
 log = "0.4"
 openssl = "0.10"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-time = "0.1"
-ureq = "1"
+time = "0.1"                                            # breaking
+reqwest = { version = "0.11.14", features = ["json"] }
+tokio = { version = "1.25.0", features = ["full"] }     # for test
 
 [dev-dependencies]
-env_logger = { version = "0.7", default-features = false }
-futures = "0.1.25"
-hyper = "0.12"
+env_logger = { version = "0.10.0", default-features = false }
+futures = "0.1.25"  # breaking
+hyper = "0.12"      # breaking
 regex = "1.3"

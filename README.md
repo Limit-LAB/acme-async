@@ -8,9 +8,9 @@ Uses ACME v2 to issue/renew certificates.
 ## Example
 
 ```rust
-use acme_lib::{Error, Directory, DirectoryUrl};
-use acme_lib::persist::FilePersist;
-use acme_lib::create_p384_key;
+use acme_async::{Error, Directory, DirectoryUrl};
+use acme_async::persist::FilePersist;
+use acme_async::create_p384_key;
 
 fn request_cert() -> Result<(), Error> {
 
@@ -118,9 +118,9 @@ When creating a new order, it's possible to provide multiple alt-names that will
 be part of the certificate. The ACME API requires you to prove ownership of each such
 domain. See [`authorizations`].
 
-[`http_challenge`]: https://docs.rs/acme-lib/latest/acme_lib/order/struct.Auth.html#method.http_challenge
-[`dns_challenge`]: https://docs.rs/acme-lib/latest/acme_lib/order/struct.Auth.html#method.dns_challenge
-[`authorizations`]: https://docs.rs/acme-lib/latest/acme_lib/order/struct.NewOrder.html#method.authorizations
+[`http_challenge`]: https://docs.rs/acme-lib/latest/acme_async/order/struct.Auth.html#method.http_challenge
+[`dns_challenge`]: https://docs.rs/acme-lib/latest/acme_async/order/struct.Auth.html#method.dns_challenge
+[`authorizations`]: https://docs.rs/acme-lib/latest/acme_async/order/struct.NewOrder.html#method.authorizations
 
 ### Rate limits
 

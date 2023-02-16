@@ -66,9 +66,9 @@ impl<P: Persist> Auth<P> {
     /// The challenge will be accessed over HTTP (not HTTPS), for obvious reasons.
     ///
     /// ```no_run
-    /// use acme_lib::persist::Persist;
-    /// use acme_lib::order::Auth;
-    /// use acme_lib::Error;
+    /// use acme_async::persist::Persist;
+    /// use acme_async::order::Auth;
+    /// use acme_async::Error;
     /// use std::fs::File;
     /// use std::io::Write;
     ///
@@ -81,7 +81,7 @@ impl<P: Persist> Auth<P> {
     ///   };
     ///   let mut file = File::create(&path)?;
     ///   file.write_all(challenge.http_proof().as_bytes())?;
-    ///   challenge.validate(5000)?;
+    ///   challenge.validate(5000).await?;
     ///   Ok(())
     /// }
     /// ```
@@ -103,15 +103,15 @@ impl<P: Persist> Auth<P> {
     /// The <proof> contains the signed token proving this account update it.
     ///
     /// ```no_run
-    /// use acme_lib::persist::Persist;
-    /// use acme_lib::order::Auth;
-    /// use acme_lib::Error;
+    /// use acme_async::persist::Persist;
+    /// use acme_async::order::Auth;
+    /// use acme_async::Error;
     ///
     /// fn dns_authorize<P: Persist>(auth: &Auth<P>) -> Result<(), Error> {
     ///   let challenge = auth.dns_challenge();
     ///   let record = format!("_acme-challenge.{}.", auth.domain_name());
     ///   // route_53_set_record(&record, "TXT", challenge.dns_proof());
-    ///   challenge.validate(5000)?;
+    ///   challenge.validate(5000).await?;
     ///   Ok(())
     /// }
     /// ```
@@ -227,12 +227,16 @@ impl<P: Persist, A> Challenge<P, A> {
     ///
     /// The user must first update the DNS record or HTTP web server depending
     /// on the type challenge being validated.
-    pub fn validate(self, delay_millis: u64) -> Result<()> {
+    pub async fn validate(self, delay_millis: u64) -> Result<()> {
         let url_chall = &self.api_challenge.url;
-        let res = self.inner.transport.call(url_chall, &ApiEmptyObject)?;
-        let _: ApiChallenge = read_json(res)?;
+        let res = self
+            .inner
+            .transport
+            .call(url_chall, &ApiEmptyObject)
+            .await?;
+        let _: ApiChallenge = read_json(res).await?;
 
-        let auth = wait_for_auth_status(&self.inner, &self.auth_url, delay_millis)?;
+        let auth = wait_for_auth_status(&self.inner, &self.auth_url, delay_millis).await?;
 
         if !auth.is_status_valid() {
             let error = auth
@@ -273,14 +277,14 @@ fn key_authorization(token: &str, key: &AcmeKey, extra_sha256: bool) -> String {
     }
 }
 
-fn wait_for_auth_status<P: Persist>(
+async fn wait_for_auth_status<P: Persist>(
     inner: &Arc<AccountInner<P>>,
     auth_url: &str,
     delay_millis: u64,
 ) -> Result<ApiAuth> {
     let auth = loop {
-        let res = inner.transport.call(auth_url, &ApiEmptyString)?;
-        let auth: ApiAuth = read_json(res)?;
+        let res = inner.transport.call(auth_url, &ApiEmptyString).await?;
+        let auth: ApiAuth = read_json(res).await?;
         if !auth.is_status_pending() {
             break auth;
         }
@@ -294,15 +298,15 @@ mod test {
     use crate::persist::*;
     use crate::*;
 
-    #[test]
-    fn test_get_challenges() -> Result<()> {
+    #[tokio::test]
+    async fn test_get_challenges() -> Result<()> {
         let server = crate::test::with_directory_server();
         let url = DirectoryUrl::Other(&server.dir_url);
         let persist = MemoryPersist::new();
-        let dir = Directory::from_url(persist, url)?;
-        let acc = dir.account("foo@bar.com")?;
-        let ord = acc.new_order("acmetest.example.com", &[])?;
-        let authz = ord.authorizations()?;
+        let dir = Directory::from_url(persist, url).await?;
+        let acc = dir.account("foo@bar.com").await?;
+        let ord = acc.new_order("acmetest.example.com", &[]).await?;
+        let authz = ord.authorizations().await?;
         assert!(authz.len() == 1);
         let auth = &authz[0];
         {

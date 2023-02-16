@@ -18,6 +18,7 @@
 //! [`CsrOrder`]: struct.CsrOrder.html
 //! [`CertOrder`]: struct.CertOrder.html
 use openssl::pkey::{self, PKey};
+use reqwest::Response;
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
@@ -51,16 +52,16 @@ impl<P: Persist> Order<P> {
 }
 
 /// Helper to refresh an order status (POST-as-GET).
-pub(crate) fn refresh_order<P: Persist>(
+pub(crate) async fn refresh_order<P: Persist>(
     inner: &Arc<AccountInner<P>>,
     url: String,
     want_status: &'static str,
 ) -> Result<Order<P>> {
-    let res = inner.transport.call(&url, &ApiEmptyString)?;
+    let res = inner.transport.call(&url, &ApiEmptyString).await?;
 
     // our test rig requires the order to be in `want_status`.
     // api_order_of is different for test compilation
-    let api_order = api_order_of(res, want_status)?;
+    let api_order = api_order_of(res, want_status).await?;
 
     Ok(Order {
         inner: inner.clone(),
@@ -70,14 +71,14 @@ pub(crate) fn refresh_order<P: Persist>(
 }
 
 #[cfg(not(test))]
-fn api_order_of(res: ureq::Response, _want_status: &str) -> Result<ApiOrder> {
-    read_json(res)
+async fn api_order_of(res: Response, _want_status: &str) -> Result<ApiOrder> {
+    read_json(res).await
 }
 
 #[cfg(test)]
 // our test rig requires the order to be in `want_status`
-fn api_order_of(res: ureq::Response, want_status: &str) -> Result<ApiOrder> {
-    let s = res.into_string()?;
+async fn api_order_of(res: Response, want_status: &str) -> Result<ApiOrder> {
+    let s = res.text().await.unwrap_or_default();
     #[allow(clippy::trivial_regex)]
     let re = regex::Regex::new("<STATUS>").unwrap();
     let b = re.replace_all(&s, want_status).to_string();
@@ -141,8 +142,8 @@ impl<P: Persist> NewOrder<P> {
     /// Refresh the order state against the ACME API.
     ///
     /// The specification calls this a "POST-as-GET" against the order URL.
-    pub fn refresh(&mut self) -> Result<()> {
-        let order = refresh_order(&self.order.inner, self.order.url.clone(), "ready")?;
+    pub async fn refresh(&mut self) -> Result<()> {
+        let order = refresh_order(&self.order.inner, self.order.url.clone(), "ready").await?;
         self.order = order;
         Ok(())
     }
@@ -153,12 +154,17 @@ impl<P: Persist> NewOrder<P> {
     ///
     /// If the order includes new domain names that have not been authorized before, this
     /// list might contain a mix of already valid and not yet valid auths.
-    pub fn authorizations(&self) -> Result<Vec<Auth<P>>> {
+    pub async fn authorizations(&self) -> Result<Vec<Auth<P>>> {
         let mut result = vec![];
         if let Some(authorizations) = &self.order.api_order.authorizations {
             for auth_url in authorizations {
-                let res = self.order.inner.transport.call(auth_url, &ApiEmptyString)?;
-                let api_auth: ApiAuth = read_json(res)?;
+                let res = self
+                    .order
+                    .inner
+                    .transport
+                    .call(auth_url, &ApiEmptyString)
+                    .await?;
+                let api_auth: ApiAuth = read_json(res).await?;
                 result.push(Auth::new(&self.order.inner, api_auth, auth_url));
             }
         }
@@ -205,10 +211,10 @@ impl<P: Persist> CsrOrder<P> {
     /// This is a convenience wrapper that in turn calls the lower level [`finalize_pkey`].
     ///
     /// [`finalize_pkey`]: struct.CsrOrder.html#method.finalize_pkey
-    pub fn finalize(self, private_key_pem: &str, delay_millis: u64) -> Result<CertOrder<P>> {
+    pub async fn finalize(self, private_key_pem: &str, delay_millis: u64) -> Result<CertOrder<P>> {
         let pkey_pri = PKey::private_key_from_pem(private_key_pem.as_bytes())
             .map_err(|e| format!("Error reading private key PEM: {}", e))?;
-        self.finalize_pkey(pkey_pri, delay_millis)
+        self.finalize_pkey(pkey_pri, delay_millis).await
     }
 
     /// Lower level finalize call that works directly with the openssl crate structures.
@@ -218,7 +224,7 @@ impl<P: Persist> CsrOrder<P> {
     /// Once the CSR has been submitted, the order goes into a `processing` status,
     /// where we must poll until the status changes. The `delay_millis` is the
     /// amount of time to wait between each poll attempt.
-    pub fn finalize_pkey(
+    pub async fn finalize_pkey(
         self,
         private_key: PKey<pkey::Private>,
         delay_millis: u64,
@@ -241,12 +247,12 @@ impl<P: Persist> CsrOrder<P> {
 
         // if the CSR is invalid, we will get a 4xx code back that
         // bombs out from this retry_call.
-        inner.transport.call(finalize_url, &finalize)?;
+        inner.transport.call(finalize_url, &finalize).await?;
 
         // wait for the status to not be processing.
         // valid -> cert is issued
         // invalid -> the whole thing is off
-        let order = wait_for_order_status(&inner, &order_url, delay_millis)?;
+        let order = wait_for_order_status(&inner, &order_url, delay_millis).await?;
 
         if !order.api_order.is_status_valid() {
             return Err(format!("Order is in status: {:?}", order.api_order.status).into());
@@ -261,13 +267,13 @@ impl<P: Persist> CsrOrder<P> {
     }
 }
 
-fn wait_for_order_status<P: Persist>(
+async fn wait_for_order_status<P: Persist>(
     inner: &Arc<AccountInner<P>>,
     url: &str,
     delay_millis: u64,
 ) -> Result<Order<P>> {
     loop {
-        let order = refresh_order(inner, url.to_string(), "valid")?;
+        let order = refresh_order(inner, url.to_string(), "valid").await?;
         if !order.api_order.is_status_processing() {
             return Ok(order);
         }
@@ -288,14 +294,14 @@ impl<P: Persist> CertOrder<P> {
     /// persistence. They can later be retreived using [`Account::certificate`].
     ///
     /// [`Account::certificate`]: ../struct.Account.html#method.certificate
-    pub fn download_and_save_cert(self) -> Result<Certificate> {
+    pub async fn download_and_save_cert(self) -> Result<Certificate> {
         //
         let primary_name = self.order.api_order.domains()[0].to_string();
         let url = self.order.api_order.certificate.expect("certificate url");
         let inner = self.order.inner;
         let realm = &inner.realm[..];
 
-        let res = inner.transport.call(&url, &ApiEmptyString)?;
+        let res = inner.transport.call(&url, &ApiEmptyString).await?;
 
         // save key and cert into persistence
         let persist = &inner.persist;
@@ -305,7 +311,7 @@ impl<P: Persist> CertOrder<P> {
         debug!("Save private key: {}", pk_key);
         persist.put(&pk_key, &pkey_pem_bytes)?;
 
-        let cert = res.into_string()?;
+        let cert = res.text().await.unwrap_or_default();
         let pk_crt = PersistKey::new(realm, PersistKind::Certificate, &primary_name);
         debug!("Save certificate: {}", pk_crt);
         persist.put(&pk_crt, cert.as_bytes())?;
@@ -325,48 +331,48 @@ mod test {
     use crate::persist::*;
     use crate::*;
 
-    #[test]
-    fn test_get_authorizations() -> Result<()> {
+    #[tokio::test]
+    async fn test_get_authorizations() -> Result<()> {
         let server = crate::test::with_directory_server();
         let url = DirectoryUrl::Other(&server.dir_url);
         let persist = MemoryPersist::new();
-        let dir = Directory::from_url(persist, url)?;
-        let acc = dir.account("foo@bar.com")?;
-        let ord = acc.new_order("acmetest.example.com", &[])?;
-        let _ = ord.authorizations()?;
+        let dir = Directory::from_url(persist, url).await?;
+        let acc = dir.account("foo@bar.com").await?;
+        let ord = acc.new_order("acmetest.example.com", &[]).await?;
+        let _ = ord.authorizations().await?;
         Ok(())
     }
 
-    #[test]
-    fn test_finalize() -> Result<()> {
+    #[tokio::test]
+    async fn test_finalize() -> Result<()> {
         let server = crate::test::with_directory_server();
         let url = DirectoryUrl::Other(&server.dir_url);
         let persist = MemoryPersist::new();
-        let dir = Directory::from_url(persist, url)?;
-        let acc = dir.account("foo@bar.com")?;
-        let ord = acc.new_order("acmetest.example.com", &[])?;
+        let dir = Directory::from_url(persist, url).await?;
+        let acc = dir.account("foo@bar.com").await?;
+        let ord = acc.new_order("acmetest.example.com", &[]).await?;
         // shortcut auth
         let ord = CsrOrder { order: ord.order };
         let pkey = cert::create_p256_key();
-        let _ord = ord.finalize_pkey(pkey, 1)?;
+        let _ord = ord.finalize_pkey(pkey, 1).await?;
         Ok(())
     }
 
-    #[test]
-    fn test_download_and_save_cert() -> Result<()> {
+    #[tokio::test]
+    async fn test_download_and_save_cert() -> Result<()> {
         let server = crate::test::with_directory_server();
         let url = DirectoryUrl::Other(&server.dir_url);
         let persist = MemoryPersist::new();
-        let dir = Directory::from_url(persist, url)?;
-        let acc = dir.account("foo@bar.com")?;
-        let ord = acc.new_order("acmetest.example.com", &[])?;
+        let dir = Directory::from_url(persist, url).await?;
+        let acc = dir.account("foo@bar.com").await?;
+        let ord = acc.new_order("acmetest.example.com", &[]).await?;
 
         // shortcut auth
         let ord = CsrOrder { order: ord.order };
         let pkey = cert::create_p256_key();
-        let ord = ord.finalize_pkey(pkey, 1)?;
+        let ord = ord.finalize_pkey(pkey, 1).await?;
 
-        let cert = ord.download_and_save_cert()?;
+        let cert = ord.download_and_save_cert().await?;
         assert_eq!("CERT HERE", cert.certificate());
         assert!(!cert.private_key().is_empty());
 

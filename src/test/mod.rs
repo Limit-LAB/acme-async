@@ -208,9 +208,9 @@ pub fn with_directory_server() -> TestServer {
     }
 }
 
-#[test]
-pub fn test_make_directory() {
+#[tokio::test]
+pub async fn test_make_directory() {
     let server = with_directory_server();
-    let res = ureq::get(&server.dir_url).call();
-    assert!(res.ok());
+    let res = reqwest::get(&server.dir_url).await;
+    assert!(res.map(|resp| resp.status().is_success()).unwrap_or(false));
 }
