@@ -1,10 +1,10 @@
 #![allow(clippy::trivial_regex)]
 
-use futures::Future;
-use hyper::{service::service_fn_ok, Body, Method, Request, Response, Server};
+use hyper::service::make_service_fn;
+use hyper::{service::service_fn, Body, Method, Request, Response, Server};
 use lazy_static::lazy_static;
+use std::convert::Infallible;
 use std::net::TcpListener;
-use std::thread;
 
 lazy_static! {
     static ref RE_URL: regex::Regex = regex::Regex::new("<URL>").unwrap();
@@ -12,7 +12,7 @@ lazy_static! {
 
 pub struct TestServer {
     pub dir_url: String,
-    shutdown: Option<futures::sync::oneshot::Sender<()>>,
+    shutdown: Option<futures::channel::oneshot::Sender<()>>,
 }
 
 impl Drop for TestServer {
@@ -165,42 +165,46 @@ fn post_certificate(_url: &str) -> Response<Body> {
         .unwrap()
 }
 
-fn route_request(req: Request<Body>, url: &str) -> Response<Body> {
+fn route_request(req: Request<Body>, url: String) -> Response<Body> {
     match (req.method(), req.uri().path()) {
-        (&Method::GET, "/directory") => get_directory(url),
+        (&Method::GET, "/directory") => get_directory(&url),
         (&Method::HEAD, "/acme/new-nonce") => head_new_nonce(),
-        (&Method::POST, "/acme/new-acct") => post_new_acct(url),
-        (&Method::POST, "/acme/new-order") => post_new_order(url),
-        (&Method::POST, "/acme/order/YTqpYUthlVfwBncUufE8") => post_get_order(url),
-        (&Method::POST, "/acme/authz/YTqpYUthlVfwBncUufE8IRWLMSRqcSs") => post_authz(url),
-        (&Method::POST, "/acme/finalize/7738992/18234324") => post_finalize(url),
-        (&Method::POST, "/acme/cert/fae41c070f967713109028") => post_certificate(url),
+        (&Method::POST, "/acme/new-acct") => post_new_acct(&url),
+        (&Method::POST, "/acme/new-order") => post_new_order(&url),
+        (&Method::POST, "/acme/order/YTqpYUthlVfwBncUufE8") => post_get_order(&url),
+        (&Method::POST, "/acme/authz/YTqpYUthlVfwBncUufE8IRWLMSRqcSs") => post_authz(&url),
+        (&Method::POST, "/acme/finalize/7738992/18234324") => post_finalize(&url),
+        (&Method::POST, "/acme/cert/fae41c070f967713109028") => post_certificate(&url),
         (_, _) => Response::builder().status(404).body(Body::empty()).unwrap(),
     }
 }
 
-pub fn with_directory_server() -> TestServer {
+pub async fn with_directory_server() -> TestServer {
     let tcp = TcpListener::bind("127.0.0.1:0").unwrap();
     let port = tcp.local_addr().unwrap().port();
 
     let url = format!("http://127.0.0.1:{}", port);
     let dir_url = format!("{}/directory", url);
 
-    let make_service = move || {
-        let url2 = url.clone();
-        service_fn_ok(move |req| route_request(req, &url2))
-    };
+    let make_service = make_service_fn(move |_| {
+        let url1 = url.clone();
+        let service = service_fn(move |req| {
+            let url2 = url1.clone();
+            async move { Ok::<_, Infallible>(route_request(req, url2)) }
+        });
+
+        async move { Ok::<_, Infallible>(service) }
+    });
+
     let server = Server::from_tcp(tcp).unwrap().serve(make_service);
 
-    let (tx, rx) = futures::sync::oneshot::channel::<()>();
+    let (tx, rx) = futures::channel::oneshot::channel::<()>();
 
-    let graceful = server
-        .with_graceful_shutdown(rx)
-        .map_err(|err| eprintln!("server error: {}", err));
-
-    thread::spawn(move || {
-        hyper::rt::run(graceful);
+    let graceful = server.with_graceful_shutdown(async move {
+        rx.await.expect("broken channel");
     });
+
+    tokio::spawn(async move { graceful.await });
 
     TestServer {
         dir_url,
@@ -210,7 +214,7 @@ pub fn with_directory_server() -> TestServer {
 
 #[tokio::test]
 pub async fn test_make_directory() {
-    let server = with_directory_server();
+    let server = with_directory_server().await;
     let res = reqwest::get(&server.dir_url).await;
     assert!(res.map(|resp| resp.status().is_success()).unwrap_or(false));
 }

@@ -168,7 +168,7 @@ mod test {
     use crate::persist::*;
     #[tokio::test]
     async fn test_create_directory() -> Result<()> {
-        let server = crate::test::with_directory_server();
+        let server = crate::test::with_directory_server().await;
         let url = DirectoryUrl::Other(&server.dir_url);
         let persist = MemoryPersist::new();
         let _ = Directory::from_url(persist, url).await?;
@@ -177,7 +177,7 @@ mod test {
 
     #[tokio::test]
     async fn test_create_acount() -> Result<()> {
-        let server = crate::test::with_directory_server();
+        let server = crate::test::with_directory_server().await;
         let url = DirectoryUrl::Other(&server.dir_url);
         let persist = MemoryPersist::new();
         let dir = Directory::from_url(persist, url).await?;
@@ -187,7 +187,7 @@ mod test {
 
     #[tokio::test]
     async fn test_persisted_acount() -> Result<()> {
-        let server = crate::test::with_directory_server();
+        let server = crate::test::with_directory_server().await;
         let url = DirectoryUrl::Other(&server.dir_url);
         let persist = MemoryPersist::new();
         let dir = Directory::from_url(persist, url).await?;

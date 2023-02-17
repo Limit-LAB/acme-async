@@ -195,7 +195,7 @@ mod test {
 
     #[tokio::test]
     async fn test_create_order() -> Result<()> {
-        let server = crate::test::with_directory_server();
+        let server = crate::test::with_directory_server().await;
         let url = DirectoryUrl::Other(&server.dir_url);
         let persist = MemoryPersist::new();
         let dir = Directory::from_url(persist, url).await?;
